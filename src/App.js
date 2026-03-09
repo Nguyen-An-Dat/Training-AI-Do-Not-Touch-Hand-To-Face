@@ -127,17 +127,44 @@ function App() {
 
   return (
     <div className={`main ${touched ? 'touched' : ''}`}>
-      <video ref={video} className="video" autoPlay />
+      <div className="header">
+        <h1>Hand Touch Detection AI</h1>
+        <p>Huấn luyện AI để cảnh báo khi bạn chạm tay lên mặt</p>
+      </div>
+
+      <div className="video-wrapper">
+        <video ref={video} className="video" autoPlay />
+        <div className={`status-badge ${touched ? 'danger' : 'safe'}`}>
+          <span className="status-dot" />
+          {touched ? 'Đang chạm mặt!' : 'An toàn'}
+        </div>
+      </div>
+
       <div className="control">
-        <button className="btn" onClick={() => train(NOT_TOUCH_LABEL)}>
-          Train 1
+        <button className="btn btn-train1" onClick={() => train(NOT_TOUCH_LABEL)}>
+          Train 1 — Không chạm
         </button>
-        <button className="btn" onClick={() => train(TOUCH_LABEL)}>
-          Train 2
+        <button className="btn btn-train2" onClick={() => train(TOUCH_LABEL)}>
+          Train 2 — Chạm tay
         </button>
-        <button className="btn" onClick={() => run()}>
-          Run
+        <button className="btn btn-run" onClick={() => run()}>
+          Chạy AI
         </button>
+      </div>
+
+      <div className="instructions">
+        <div className="step">
+          <span className="step-num">1</span>
+          Giữ thẳng mặt &rarr; Train 1
+        </div>
+        <div className="step">
+          <span className="step-num">2</span>
+          Chạm tay vào mặt &rarr; Train 2
+        </div>
+        <div className="step">
+          <span className="step-num">3</span>
+          Nhấn Chạy AI để bắt đầu
+        </div>
       </div>
     </div>
   );
