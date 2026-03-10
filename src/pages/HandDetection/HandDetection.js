@@ -23,10 +23,28 @@ function HandDetection() {
   const canPlaySound = useRef(true);
   const [touched, setTouched] = useState(false);
   const [trainingStatus, setTrainingStatus] = useState({ label: null, progress: 0 });
+  const [cameraError, setCameraError] = useState(null);
+
+  const getCameraErrorMessage = (err) => {
+    if (!err) return "Trình duyệt không hỗ trợ truy cập camera.";
+    const name = err.name || "";
+    if (name === "NotFoundError" || name === "DevicesNotFoundError")
+      return "Không tìm thấy camera trên thiết bị này.";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError")
+      return "Quyền truy cập camera bị từ chối. Vui lòng cấp quyền trong cài đặt trình duyệt.";
+    if (name === "NotReadableError" || name === "TrackStartError")
+      return "Camera đang được sử dụng bởi ứng dụng khác.";
+    return "Không thể truy cập camera. Vui lòng kiểm tra lại thiết bị.";
+  };
 
   const init = async () => {
     console.log("init...");
-    await setupCamera();
+    try {
+      await setupCamera();
+    } catch (err) {
+      setCameraError(getCameraErrorMessage(err));
+      return;
+    }
     console.log("setup camera successfully");
 
     classifier.current = knnClassifier.create();
@@ -133,6 +151,22 @@ function HandDetection() {
         <p>Huấn luyện AI để cảnh báo khi bạn chạm tay lên mặt</p>
       </div>
 
+      {cameraError && (
+        <div className="camera-error-alert">
+          <div className="camera-error-alert__icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 7 16 12 23 17V7z" />
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+              <line x1="1" y1="1" x2="23" y2="23" />
+            </svg>
+          </div>
+          <div className="camera-error-alert__body">
+            <p className="camera-error-alert__title">Không thể truy cập camera</p>
+            <p className="camera-error-alert__message">{cameraError}</p>
+          </div>
+        </div>
+      )}
+
       <div className="video-wrapper">
         <video ref={video} className="video" autoPlay />
         <div className={`status-badge ${touched ? 'danger' : 'safe'}`}>
@@ -142,13 +176,13 @@ function HandDetection() {
       </div>
 
       <div className="control">
-        <button className="btn btn-train1" onClick={() => train(NOT_TOUCH_LABEL)} disabled={!!trainingStatus.label}>
+        <button className="btn btn-train1" onClick={() => train(NOT_TOUCH_LABEL)} disabled={!!trainingStatus.label || !!cameraError}>
           Train 1 — Không chạm
         </button>
-        <button className="btn btn-train2" onClick={() => train(TOUCH_LABEL)} disabled={!!trainingStatus.label}>
+        <button className="btn btn-train2" onClick={() => train(TOUCH_LABEL)} disabled={!!trainingStatus.label || !!cameraError}>
           Train 2 — Chạm tay
         </button>
-        <button className="btn btn-run" onClick={() => run()} disabled={!!trainingStatus.label}>
+        <button className="btn btn-run" onClick={() => run()} disabled={!!trainingStatus.label || !!cameraError}>
           Chạy AI
         </button>
       </div>
