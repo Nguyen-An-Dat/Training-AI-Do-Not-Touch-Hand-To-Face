@@ -4,6 +4,10 @@ import { initNotifications, notify } from "@mycv/f8-notification";
 import * as tf from "@tensorflow/tfjs";
 import * as mobilenet from "@tensorflow-models/mobilenet";
 import * as knnClassifier from "@tensorflow-models/knn-classifier";
+import statisticsManager from "../../utils/statisticsManager";
+import modeManager, { WORK_MODES } from "../../utils/modeManager";
+import dataManager from "../../utils/dataManager";
+import notificationManager from "../../utils/notificationManager";
 import soundURL from "../../assets/alarm.mp3";
 import "./HandDetection.css";
 
@@ -26,6 +30,18 @@ function HandDetection() {
   const [trainingStatus, setTrainingStatus] = useState({ label: null, progress: 0 });
   const [cameraError, setCameraError] = useState(null);
   const [customAudioUrl, setCustomAudioUrl] = useState(null);
+  const [modelSaveMsg, setModelSaveMsg] = useState(null);
+  const [sessionActive, setSessionActive] = useState(false);
+  const [currentMode, setCurrentMode] = useState(() => modeManager.getMode());
+  const [lastSafeTime, setLastSafeTime] = useState(0);
+  const [videoZoom, setVideoZoom] = useState(1);
+  const [confidence, setConfidence] = useState({ touch: 0, notTouch: 0 });
+  const [touchLog, setTouchLog] = useState([]);
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const lastTouchRecordedRef = useRef(0);
+  const lastSafeTimeRef = useRef(Date.now());
+  const heatCanvasRef = useRef();
+  const isRunningRef = useRef(false);
 
   const getCameraErrorMessage = (err) => {
     if (!err) return "Trình duyệt không hỗ trợ truy cập camera.";
@@ -116,8 +132,54 @@ function HandDetection() {
     });
   };
 
+  const addHeatPoint = () => {
+    const canvas = heatCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    // Mặt thường nằm ở vùng trung tâm-trên của khung hình
+    const cx = canvas.width / 2;
+    const cy = canvas.height * 0.45;
+    for (let i = 0; i < 6; i++) {
+      const x = cx + (Math.random() - 0.5) * 90;
+      const y = cy + (Math.random() - 0.5) * 70;
+      const r = 22 + Math.random() * 14;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, 'rgba(255, 50, 0, 0.18)');
+      grad.addColorStop(0.5, 'rgba(255, 120, 0, 0.08)');
+      grad.addColorStop(1, 'rgba(255, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  const clearHeatmap = () => {
+    const canvas = heatCanvasRef.current;
+    if (!canvas) return;
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const handleSaveModel = () => {
+    const result = dataManager.saveModel(classifier.current);
+    setModelSaveMsg(result.success ? '✓ Đã lưu model' : '✗ ' + result.error);
+    setTimeout(() => setModelSaveMsg(null), 3000);
+  };
+
+  const handleLoadModel = () => {
+    if (!classifier.current) return;
+    const result = dataManager.loadModel(classifier.current);
+    setModelSaveMsg(result.success ? '✓ Đã tải model, nhấn Chạy AI' : '✗ ' + result.error);
+    setTimeout(() => setModelSaveMsg(null), 3500);
+  };
+
   const train = async (label) => {
     console.log(`[${label}] Đang train cho máy tính của bạn...`);
+    // Bắt đầu session nếu chưa bắt đầu
+    if (!sessionActive) {
+      statisticsManager.startSession();
+      setSessionActive(true);
+    }
     for (let i = 0; i < TRAINING_TIMES; i++) {
       const progress = parseInt((i + 1) / TRAINING_TIMES * 100);
       console.log(`Progress ${progress}% `);
@@ -125,6 +187,8 @@ function HandDetection() {
       await training(label);
     }
     setTrainingStatus({ label: null, progress: 0 });
+    // Ghi nhận training thành công
+    statisticsManager.recordTrainingSuccess(95);
   };
 
   /**
@@ -145,39 +209,129 @@ function HandDetection() {
   };
 
   const run = async () => {
+    if (!isRunningRef.current) return;
     const embedding = mobilenetModule.current.infer(video.current, true);
     const result = await classifier.current.predictClass(embedding);
     console.log("Label: ", result.label);
     console.log("Confidences: ", result.confidences);
+
+    const touchConf = result.confidences[TOUCH_LABEL] || 0;
+    const notTouchConf = result.confidences[NOT_TOUCH_LABEL] || 0;
+    setConfidence({ touch: touchConf, notTouch: notTouchConf });
+
     if (
       result.label === TOUCH_LABEL &&
       result.confidences[result.label] > TOUCH_CONFIDENCE
     ) {
       console.log("Touched");
-      if (canPlaySound.current) {
+      
+      // Xác định có phát âm thanh không dựa trên chế độ
+      const shouldPlaySound = currentMode !== WORK_MODES.AMBIENT && 
+        !(currentMode === WORK_MODES.STUDY && !modeManager.getModeConfig('study').notifications);
+      
+      if (shouldPlaySound && canPlaySound.current) {
         canPlaySound.current = false;
         soundRef.current.play();
       }
-      notify("Cảnh báo", { body: "Vui lòng không chạm tay vào mạt!" });
+      
+      // Gửi thông báo
+      const notificationMsg = currentMode === WORK_MODES.POMODORO 
+        ? "🍅 Ngắt Pomodoro! Bạn chạm tay vào mặt"
+        : currentMode === WORK_MODES.STUDY 
+        ? "📚 Chú ý! Chạm tay khi đang học"
+        : "Cảnh báo";
+      
+      notify(notificationMsg, { body: "Vui lòng không chạm tay vào mạt!" });
+      
+      // Ghi nhận touch event vào thống kê (chỉ ghi 1 lần mỗi 2 giây)
+      const now = Date.now();
+      if (now - lastTouchRecordedRef.current > 2000 && sessionActive) {
+        statisticsManager.recordTouch(touchConf);
+        lastTouchRecordedRef.current = now;
+        // Thêm vào touch log
+        const entry = {
+          id: now,
+          time: new Date().toLocaleTimeString('vi-VN'),
+          confidence: (touchConf * 100).toFixed(1),
+        };
+        setTouchLog(prev => [entry, ...prev].slice(0, 50));
+        // Vẽ lên heatmap
+        addHeatPoint();
+      }
+      
+      // Gửi thông báo desktop + rung
+      notificationManager.alert(
+        notificationMsg,
+        'Vui lòng không chạm tay vào mặt!'
+      );
       setTouched(true);
     } else {
       console.log("Not touched");
       setTouched(false);
+      // Cập nhật thời gian an toàn
+      lastSafeTimeRef.current = Date.now();
+      setLastSafeTime(Date.now() - lastSafeTimeRef.current);
     }
     await sleep(200);
-    run();
+    if (isRunningRef.current) run();
   };
 
   const sleep = (ms = 0) => {
     return new Promise((resolve) => setTimeout(resolve, ms));
   };
 
+  const formatSafeTime = (ms) => {
+    if (ms < 0) return "0s";
+    const seconds = Math.floor((ms / 1000) % 60);
+    const minutes = Math.floor((ms / 1000 / 60) % 60);
+    const hours = Math.floor(ms / 1000 / 60 / 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else {
+      return `${seconds}s`;
+    }
+  };
+
   useEffect(() => {
     init();
+    // Bắt đầu phiên làm việc
+    statisticsManager.startSession();
+    setSessionActive(true);
+    lastSafeTimeRef.current = Date.now();
+    
     soundRef.current.on("end", function () {
       canPlaySound.current = true;
     });
+
+    // Áp dụng volume từ notificationManager
+    soundRef.current.volume(notificationManager.getVolume());
+
+    // Subscribe đến thay đổi notification settings (volume)
+    const unsubscribeNotif = notificationManager.subscribe((settings) => {
+      soundRef.current.volume(settings.volume);
+    });
+
+    // Subscribe đến thay đổi mode
+    const unsubscribeMode = modeManager.subscribe((newModes) => {
+      setCurrentMode(newModes.current);
+    });
+
+    // Cập nhật thời gian an toàn mỗi 1 giây
+    const safeTimeInterval = setInterval(() => {
+      setLastSafeTime(Date.now() - lastSafeTimeRef.current);
+    }, 1000);
+    
     return () => {
+      // Dừng vòng lặp run() nếu đang chạy
+      isRunningRef.current = false;
+      clearInterval(safeTimeInterval);
+      unsubscribeMode();
+      unsubscribeNotif();
+      // Kết thúc phiên làm việc khi unmount (endSession tự kiểm tra nội bộ)
+      statisticsManager.endSession();
       if (customAudioUrl) {
         URL.revokeObjectURL(customAudioUrl);
       }
@@ -188,8 +342,17 @@ function HandDetection() {
   return (
     <div className={`main ${touched ? 'touched' : ''}`}>
       <div className="header">
-        <h1>Hand Touch Detection AI</h1>
-        <p>Huấn luyện AI để cảnh báo khi bạn chạm tay lên mặt</p>
+        <div className="header-top">
+          <div>
+            <h1>Hand Touch Detection AI</h1>
+            <p>Huấn luyện AI để cảnh báo khi bạn chạm tay lên mặt</p>
+          </div>
+          <div className="mode-indicator">
+            {currentMode === WORK_MODES.POMODORO && <span className="mode-badge pomodoro">🍅 Pomodoro</span>}
+            {currentMode === WORK_MODES.STUDY && <span className="mode-badge study">📚 Study</span>}
+            {currentMode === WORK_MODES.AMBIENT && <span className="mode-badge ambient">🌊 Ambient</span>}
+          </div>
+        </div>
       </div>
 
       {cameraError && (
@@ -208,47 +371,83 @@ function HandDetection() {
         </div>
       )}
 
-      <div className="video-wrapper">
-        <video ref={video} className="video" autoPlay />
-        <div className={`status-badge ${touched ? 'danger' : 'safe'}`}>
-          <span className="status-dot" />
-          {touched ? 'Đang chạm mặt!' : 'An toàn'}
+      {/* ===== Layout 2 cột: trái (video + confidence) | phải (timer + log) ===== */}
+      <div className="detection-layout">
+
+        {/* Cột trái: Video + Confidence bars */}
+        <div className="detection-left">
+          <div className="video-wrapper" style={{ transform: `scale(${videoZoom})` }}>
+            <video ref={video} className="video" autoPlay />
+            <canvas
+              ref={heatCanvasRef}
+              width={480}
+              height={360}
+              className={`heatmap-canvas ${showHeatmap ? 'visible' : 'hidden'}`}
+            />
+            <div className={`status-badge ${touched ? 'danger' : 'safe'}`}>
+              <span className="status-dot" />
+              {touched ? 'Đang chạm mặt!' : 'An toàn'}
+            </div>
+            <div className="video-controls">
+              <button className="video-control-btn" onClick={() => setVideoZoom(Math.max(1, videoZoom - 0.1))} title="Thu nhỏ">−</button>
+              <span className="video-zoom-level">{(videoZoom * 100).toFixed(0)}%</span>
+              <button className="video-control-btn" onClick={() => setVideoZoom(Math.min(2, videoZoom + 0.1))} title="Phóng to">+</button>
+              <button
+                className={`video-control-btn heatmap-toggle ${showHeatmap ? 'active' : ''}`}
+                onClick={() => setShowHeatmap(h => !h)}
+                title={showHeatmap ? 'Ẩn heatmap' : 'Hiện heatmap'}
+              >🔥</button>
+              <button className="video-control-btn" onClick={clearHeatmap} title="Xóa heatmap">✕</button>
+            </div>
+          </div>
+
+          {/* Confidence bars ngay bên dưới video */}
+          <div className="confidence-panel">
+            <div className="confidence-row">
+              <span className="confidence-label touch-label">👋 Chạm tay</span>
+              <div className="confidence-bar-wrap">
+                <div className="confidence-bar touch-bar" style={{ width: `${(confidence.touch * 100).toFixed(0)}%` }} />
+              </div>
+              <span className="confidence-pct">{(confidence.touch * 100).toFixed(0)}%</span>
+            </div>
+            <div className="confidence-row">
+              <span className="confidence-label safe-label">✅ Không chạm</span>
+              <div className="confidence-bar-wrap">
+                <div className="confidence-bar safe-bar" style={{ width: `${(confidence.notTouch * 100).toFixed(0)}%` }} />
+              </div>
+              <span className="confidence-pct">{(confidence.notTouch * 100).toFixed(0)}%</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Cột phải: Safe timer + Touch log */}
+        <div className="detection-right">
+          <div className="safe-time-display">
+            <div className="safe-time-label">⏱ Không chạm</div>
+            <div className="safe-time-value">{formatSafeTime(lastSafeTime)}</div>
+          </div>
+
+          {touchLog.length > 0 && (
+            <div className="touch-log">
+              <div className="touch-log__header">
+                <span className="touch-log__title">📋 Lịch sử ({touchLog.length})</span>
+                <button className="touch-log__clear" onClick={() => setTouchLog([])}>× Xóa</button>
+              </div>
+              <div className="touch-log__list">
+                {touchLog.map(entry => (
+                  <div key={entry.id} className="touch-log__item">
+                    <span className="touch-log__icon">👋</span>
+                    <span className="touch-log__time">{entry.time}</span>
+                    <span className="touch-log__conf">Conf: <strong>{entry.confidence}%</strong></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="control">
-        <button className="btn btn-train1" onClick={() => train(NOT_TOUCH_LABEL)} disabled={!!trainingStatus.label || !!cameraError}>
-          Train 1 — Không chạm
-        </button>
-        <button className="btn btn-train2" onClick={() => train(TOUCH_LABEL)} disabled={!!trainingStatus.label || !!cameraError}>
-          Train 2 — Chạm tay
-        </button>
-        <button className="btn btn-run" onClick={() => run()} disabled={!!trainingStatus.label || !!cameraError}>
-          Chạy AI
-        </button>
-      </div>
-
-      <div className="audio-control">
-        <label className="audio-label">
-          <input 
-            ref={fileInputRef}
-            type="file" 
-            accept="audio/*" 
-            onChange={handleAudioUpload}
-            style={{ display: 'none' }}
-          />
-          <span className="btn btn-audio">Chọn âm thanh cảnh báo</span>
-        </label>
-        {customAudioUrl && (
-          <button className="btn btn-reset" onClick={resetAudio}>
-            Reset âm thanh mặc định
-          </button>
-        )}
-        {customAudioUrl && (
-          <span className="audio-selected">✓ Đã tải âm thanh tùy chỉnh</span>
-        )}
-      </div>
-
+      {/* Training progress — full width, chỉ hiện khi đang train */}
       {trainingStatus.label && (
         <div className="training-progress">
           <div className="training-progress__header">
@@ -258,27 +457,83 @@ function HandDetection() {
             <span className="training-progress__percent">{trainingStatus.progress}%</span>
           </div>
           <div className="training-progress__bar">
-            <div
-              className="training-progress__fill"
-              style={{ width: `${trainingStatus.progress}%` }}
-            />
+            <div className="training-progress__fill" style={{ width: `${trainingStatus.progress}%` }} />
           </div>
         </div>
       )}
 
+      {/* ===== Action Toolbar: tất cả nút được nhóm gọn ===== */}
+      <div className="action-toolbar">
+        <div className="action-group">
+          <span className="action-group__label">Huấn luyện</span>
+          <div className="action-group__btns">
+            <button className="btn btn-train1" onClick={() => train(NOT_TOUCH_LABEL)} disabled={!!trainingStatus.label || !!cameraError}>
+              Train 1
+            </button>
+            <button className="btn btn-train2" onClick={() => train(TOUCH_LABEL)} disabled={!!trainingStatus.label || !!cameraError}>
+              Train 2
+            </button>
+          </div>
+        </div>
+
+        <div className="action-divider" />
+
+        <div className="action-group">
+          <span className="action-group__label">Phát hiện</span>
+          <div className="action-group__btns">
+            <button className="btn btn-run" onClick={() => { isRunningRef.current = true; run(); }} disabled={!!trainingStatus.label || !!cameraError}>
+              ▶ Chạy AI
+            </button>
+          </div>
+        </div>
+
+        <div className="action-divider" />
+
+        <div className="action-group">
+          <span className="action-group__label">Model</span>
+          <div className="action-group__btns">
+            <button className="btn btn-save-model" onClick={handleSaveModel} disabled={!!cameraError}>
+              💾 Lưu
+            </button>
+            <button className="btn btn-load-model" onClick={handleLoadModel} disabled={!!cameraError}>
+              📂 Tải
+            </button>
+          </div>
+          {modelSaveMsg && (
+            <span className={`model-save-msg ${modelSaveMsg.startsWith('✓') ? 'success' : 'error'}`}>
+              {modelSaveMsg}
+            </span>
+          )}
+        </div>
+
+        <div className="action-divider" />
+
+        <div className="action-group">
+          <span className="action-group__label">Âm thanh</span>
+          <div className="action-group__btns">
+            <label className="audio-label">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                onChange={handleAudioUpload}
+                style={{ display: 'none' }}
+              />
+              <span className="btn btn-audio">🎵 Tải lên</span>
+            </label>
+            {customAudioUrl && (
+              <button className="btn btn-reset" onClick={resetAudio}>↩ Reset</button>
+            )}
+          </div>
+          {customAudioUrl && <span className="audio-selected">✓ Âm thanh tùy chỉnh</span>}
+        </div>
+      </div>
+
+      {/* Instructions */}
       <div className="instructions">
-        <div className="step">
-          <span className="step-num">1</span>
-          Giữ thẳng mặt &rarr; Train 1
-        </div>
-        <div className="step">
-          <span className="step-num">2</span>
-          Chạm tay vào mặt &rarr; Train 2
-        </div>
-        <div className="step">
-          <span className="step-num">3</span>
-          Nhấn Chạy AI để bắt đầu
-        </div>
+        <div className="step"><span className="step-num">1</span> Mặt thẳng → Train 1</div>
+        <div className="step"><span className="step-num">2</span> Chạm tay → Train 2</div>
+        <div className="step"><span className="step-num">3</span> ▶ Chạy AI</div>
       </div>
     </div>
   );

@@ -1,3 +1,52 @@
+/* Theme CSS Variables */
+:root[data-theme="light"],
+body.theme-light {
+  --bg-primary: #f5f6f7;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f0f0f0;
+  
+  --text-primary: #2c3e50;
+  --text-secondary: #7f8c8d;
+  --text-tertiary: #95a5a6;
+  
+  --border-color: #ecf0f1;
+  --border-color-light: #f8f9fa;
+  
+  --accent-primary: #3498db;
+  --accent-hover: #2980b9;
+  --accent-danger: #e74c3c;
+  --accent-success: #27ae60;
+  --accent-warning: #f39c12;
+  
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="dark"],
+body.theme-dark {
+  --bg-primary: #0f0f1a;
+  --bg-secondary: #1a1a2e;
+  --bg-tertiary: #16213e;
+  
+  --text-primary: #ecf0f1;
+  --text-secondary: #bdc3c7;
+  --text-tertiary: #95a5a6;
+  
+  --border-color: #34495e;
+  --border-color-light: #2c3e50;
+  
+  --accent-primary: #3498db;
+  --accent-hover: #2980b9;
+  --accent-danger: #e74c3c;
+  --accent-success: #27ae60;
+  --accent-warning: #f39c12;
+  
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -5,9 +54,11 @@
 }
 
 body {
-  background-color: #0f0f1a;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   overflow: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Root layout: sidebar + content side by side */
@@ -15,6 +66,7 @@ body {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  background-color: var(--bg-primary);
 }
 
 /* Scrollable content area */
@@ -23,7 +75,7 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  background: #0f0f1a;
+  background: var(--bg-primary);
 }
 
 .app-content > * {

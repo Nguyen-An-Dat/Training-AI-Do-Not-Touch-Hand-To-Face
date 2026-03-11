@@ -3,5 +3,5 @@ services:
     image: hand-detection-ai
     container_name: hand-detection
     ports:
-      - "3000:80"
+      - "2002:80"
     restart: unless-stopped
