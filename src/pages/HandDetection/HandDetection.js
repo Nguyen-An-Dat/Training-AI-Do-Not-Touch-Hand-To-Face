@@ -7,10 +7,6 @@ import * as knnClassifier from "@tensorflow-models/knn-classifier";
 import soundURL from "../../assets/alarm.mp3";
 import "./HandDetection.css";
 
-var sound = new Howl({
-  src: [soundURL],
-});
-
 const NOT_TOUCH_LABEL = "not_touch";
 const TOUCH_LABEL = "touch";
 const TRAINING_TIMES = 50;
@@ -21,9 +17,15 @@ function HandDetection() {
   const classifier = useRef();
   const mobilenetModule = useRef();
   const canPlaySound = useRef(true);
+  const fileInputRef = useRef();
+  const soundRef = useRef(new Howl({
+    src: [soundURL],
+    html5: true,
+  }));
   const [touched, setTouched] = useState(false);
   const [trainingStatus, setTrainingStatus] = useState({ label: null, progress: 0 });
   const [cameraError, setCameraError] = useState(null);
+  const [customAudioUrl, setCustomAudioUrl] = useState(null);
 
   const getCameraErrorMessage = (err) => {
     if (!err) return "Trình duyệt không hỗ trợ truy cập camera.";
@@ -35,6 +37,41 @@ function HandDetection() {
     if (name === "NotReadableError" || name === "TrackStartError")
       return "Camera đang được sử dụng bởi ứng dụng khác.";
     return "Không thể truy cập camera. Vui lòng kiểm tra lại thiết bị.";
+  };
+
+  const handleAudioUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const audioUrl = URL.createObjectURL(file);
+      setCustomAudioUrl(audioUrl);
+      soundRef.current.unload();
+      soundRef.current = new Howl({
+        src: [audioUrl],
+        html5: true,
+      });
+      // Gắn event listener cho instance mới
+      soundRef.current.on("end", function () {
+        canPlaySound.current = true;
+      });
+      console.log("Audio uploaded:", file.name, "URL:", audioUrl);
+    }
+  };
+
+  const resetAudio = () => {
+    if (customAudioUrl) {
+      URL.revokeObjectURL(customAudioUrl);
+      setCustomAudioUrl(null);
+      soundRef.current.unload();
+      soundRef.current = new Howl({
+        src: [soundURL],
+        html5: true,
+      });
+      // Gắn event listener cho instance mới
+      soundRef.current.on("end", function () {
+        canPlaySound.current = true;
+      });
+      console.log("Audio reset to default");
+    }
   };
 
   const init = async () => {
@@ -119,7 +156,7 @@ function HandDetection() {
       console.log("Touched");
       if (canPlaySound.current) {
         canPlaySound.current = false;
-        sound.play();
+        soundRef.current.play();
       }
       notify("Cảnh báo", { body: "Vui lòng không chạm tay vào mạt!" });
       setTouched(true);
@@ -137,10 +174,14 @@ function HandDetection() {
 
   useEffect(() => {
     init();
-    sound.on("end", function () {
+    soundRef.current.on("end", function () {
       canPlaySound.current = true;
     });
-    return () => {};
+    return () => {
+      if (customAudioUrl) {
+        URL.revokeObjectURL(customAudioUrl);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -185,6 +226,27 @@ function HandDetection() {
         <button className="btn btn-run" onClick={() => run()} disabled={!!trainingStatus.label || !!cameraError}>
           Chạy AI
         </button>
+      </div>
+
+      <div className="audio-control">
+        <label className="audio-label">
+          <input 
+            ref={fileInputRef}
+            type="file" 
+            accept="audio/*" 
+            onChange={handleAudioUpload}
+            style={{ display: 'none' }}
+          />
+          <span className="btn btn-audio">Chọn âm thanh cảnh báo</span>
+        </label>
+        {customAudioUrl && (
+          <button className="btn btn-reset" onClick={resetAudio}>
+            Reset âm thanh mặc định
+          </button>
+        )}
+        {customAudioUrl && (
+          <span className="audio-selected">✓ Đã tải âm thanh tùy chỉnh</span>
+        )}
       </div>
 
       {trainingStatus.label && (
