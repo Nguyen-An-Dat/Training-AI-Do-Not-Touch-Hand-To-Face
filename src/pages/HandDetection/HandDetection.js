@@ -8,6 +8,8 @@ import statisticsManager from "../../utils/statisticsManager";
 import modeManager, { WORK_MODES } from "../../utils/modeManager";
 import dataManager from "../../utils/dataManager";
 import notificationManager from "../../utils/notificationManager";
+import useHeatmapWorker from '../../hooks/useHeatmapWorker';
+import useMLWorker from '../../hooks/useMLWorker';
 import soundURL from "../../assets/alarm.mp3";
 import "./HandDetection.css";
 
@@ -42,10 +44,24 @@ function HandDetection() {
   const lastSafeTimeRef = useRef(Date.now());
   const heatCanvasRef = useRef();
   const isRunningRef = useRef(false);
+  const cameraStreamRef = useRef(null);
+  const [cameraOn, setCameraOn] = useState(true);
+  const fpsCountRef = useRef(0);
+  const [fps, setFps] = useState(0);
+
+  // ===== Workers & optimisations =====
+  const heatmap = useHeatmapWorker(heatCanvasRef);
+  const mlWorker = useMLWorker();
 
   const getCameraErrorMessage = (err) => {
-    if (!err) return "Trình duyệt không hỗ trợ truy cập camera.";
+    if (!err) return "Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập và kết nối HTTPS.";
     const name = err.name || "";
+    if (name === "InsecureContextError") {
+      return "Truy cập camera trên điện thoại cần HTTPS. Hãy mở web bằng https:// hoặc localhost.";
+    }
+    if (name === "NotSupportedError") {
+      return "Trình duyệt hiện tại không hỗ trợ truy cập camera (getUserMedia).";
+    }
     if (name === "NotFoundError" || name === "DevicesNotFoundError")
       return "Không tìm thấy camera trên thiết bị này.";
     if (name === "NotAllowedError" || name === "PermissionDeniedError")
@@ -109,68 +125,128 @@ function HandDetection() {
     initNotifications({ cooldown: 3000 });
   };
 
-  const setupCamera = () => {
-    return new Promise((resolve, reject) => {
-      navigator.getUserMedia =
-        navigator.getUserMedia ||
-        navigator.webkitGetUserMedia ||
-        navigator.mozGetUserMedia ||
-        navigator.msGetUserMedia;
+  const setupCamera = async () => {
+    const host = window.location.hostname;
+    const isLocalHost = host === "localhost" || host === "127.0.0.1";
+    const isSecure = window.isSecureContext || isLocalHost;
 
-      if (navigator.getUserMedia) {
-        navigator.getUserMedia(
-          { video: true },
-          (stream) => {
-            video.current.srcObject = stream;
-            video.current.addEventListener("loadeddata", resolve);
-          },
-          (err) => reject(err)
-        );
-      } else {
-        reject();
+    if (!isSecure) {
+      const insecureErr = new Error("Camera requires secure context");
+      insecureErr.name = "InsecureContextError";
+      throw insecureErr;
+    }
+
+    const attachStream = async (stream) => {
+      cameraStreamRef.current = stream;
+      if (!video.current) return;
+
+      video.current.srcObject = stream;
+      video.current.setAttribute("playsinline", "true");
+      video.current.muted = true;
+
+      try {
+        await video.current.play();
+      } catch (playErr) {
+        console.warn("Video autoplay blocked:", playErr);
       }
+    };
+
+    if (navigator.mediaDevices?.getUserMedia) {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false,
+      });
+      await attachStream(stream);
+      return;
+    }
+
+    const legacyGetUserMedia =
+      navigator.getUserMedia ||
+      navigator.webkitGetUserMedia ||
+      navigator.mozGetUserMedia ||
+      navigator.msGetUserMedia;
+
+    if (!legacyGetUserMedia) {
+      const unsupportedErr = new Error("getUserMedia is not supported");
+      unsupportedErr.name = "NotSupportedError";
+      throw unsupportedErr;
+    }
+
+    await new Promise((resolve, reject) => {
+      legacyGetUserMedia.call(
+        navigator,
+        { video: true, audio: false },
+        async (stream) => {
+          await attachStream(stream);
+          resolve();
+        },
+        reject
+      );
     });
   };
 
-  const addHeatPoint = () => {
-    const canvas = heatCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    // Mặt thường nằm ở vùng trung tâm-trên của khung hình
-    const cx = canvas.width / 2;
-    const cy = canvas.height * 0.45;
-    for (let i = 0; i < 6; i++) {
-      const x = cx + (Math.random() - 0.5) * 90;
-      const y = cy + (Math.random() - 0.5) * 70;
-      const r = 22 + Math.random() * 14;
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-      grad.addColorStop(0, 'rgba(255, 50, 0, 0.18)');
-      grad.addColorStop(0.5, 'rgba(255, 120, 0, 0.08)');
-      grad.addColorStop(1, 'rgba(255, 0, 0, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
+  // addHeatPoint / clearHeatmap → delegated to useHeatmapWorker
+
+  const handleSaveModel = async () => {
+    if (mlWorker.isReady()) {
+      try {
+        const workerDataset = await mlWorker.getDataset();
+        if (!workerDataset || Object.keys(workerDataset).length === 0) {
+          setModelSaveMsg('✗ Chưa có dữ liệu training để lưu.');
+        } else {
+          dataManager.saveModelFromWorkerData(workerDataset);
+          setModelSaveMsg('✓ Đã lưu model');
+        }
+      } catch (e) {
+        setModelSaveMsg('✗ Lỗi: ' + e.message);
+      }
+    } else {
+      // Fallback: main-thread classifier
+      const result = dataManager.saveModel(classifier.current);
+      setModelSaveMsg(result.success ? '✓ Đã lưu model' : '✗ ' + result.error);
     }
-  };
-
-  const clearHeatmap = () => {
-    const canvas = heatCanvasRef.current;
-    if (!canvas) return;
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-  };
-
-  const handleSaveModel = () => {
-    const result = dataManager.saveModel(classifier.current);
-    setModelSaveMsg(result.success ? '✓ Đã lưu model' : '✗ ' + result.error);
     setTimeout(() => setModelSaveMsg(null), 3000);
   };
 
-  const handleLoadModel = () => {
-    if (!classifier.current) return;
-    const result = dataManager.loadModel(classifier.current);
-    setModelSaveMsg(result.success ? '✓ Đã tải model, nhấn Chạy AI' : '✗ ' + result.error);
+  const handleLoadModel = async () => {
+    if (mlWorker.isReady()) {
+      const rawData = dataManager.loadModelRaw();
+      if (!rawData) {
+        setModelSaveMsg('✗ Không tìm thấy model đã lưu.');
+        setTimeout(() => setModelSaveMsg(null), 3500);
+        return;
+      }
+      try {
+        await mlWorker.setDataset(rawData);
+        setModelSaveMsg('✓ Đã tải model, nhấn Chạy AI');
+      } catch (e) {
+        setModelSaveMsg('✗ Lỗi: ' + e.message);
+      }
+    } else {
+      if (!classifier.current) return;
+      const result = dataManager.loadModel(classifier.current);
+      setModelSaveMsg(result.success ? '✓ Đã tải model, nhấn Chạy AI' : '✗ ' + result.error);
+    }
     setTimeout(() => setModelSaveMsg(null), 3500);
+  };
+
+  const toggleCamera = async () => {
+    if (cameraOn) {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop());
+        cameraStreamRef.current = null;
+      }
+      if (video.current) video.current.srcObject = null;
+      setCameraOn(false);
+    } else {
+      try {
+        await setupCamera();
+        setCameraOn(true);
+        setCameraError(null);
+      } catch (err) {
+        setCameraError(getCameraErrorMessage(err));
+      }
+    }
   };
 
   const train = async (label) => {
@@ -202,7 +278,16 @@ function HandDetection() {
   const training = (label) => {
     return new Promise(async resolve => {
       const embedding = mobilenetModule.current.infer(video.current, true);
-      classifier.current.addExample(embedding, label);
+      if (mlWorker.isReady()) {
+        // KNN trong worker — extract Float32Array rồi dispose tensor ngay
+        const data = await embedding.data();
+        embedding.dispose();
+        mlWorker.addExample(data, label);
+      } else {
+        // Fallback: main-thread KNN
+        classifier.current.addExample(embedding, label);
+        embedding.dispose();
+      }
       await sleep(100);
       resolve();
     });
@@ -211,7 +296,28 @@ function HandDetection() {
   const run = async () => {
     if (!isRunningRef.current) return;
     const embedding = mobilenetModule.current.infer(video.current, true);
-    const result = await classifier.current.predictClass(embedding);
+
+    let result;
+    if (mlWorker.isReady()) {
+      // KNN prediction trong worker (off main thread)
+      const data = await embedding.data();
+      embedding.dispose();
+      try {
+        result = await mlWorker.predict(data);
+      } catch (e) {
+        // Worker chưa có examples → chờ training
+        if (isRunningRef.current) run();
+        return;
+      }
+    } else {
+      // Fallback: main-thread KNN
+      result = await classifier.current.predictClass(embedding);
+      embedding.dispose();
+    }
+
+    // FPS counter
+    fpsCountRef.current += 1;
+
     console.log("Label: ", result.label);
     console.log("Confidences: ", result.confidences);
 
@@ -255,8 +361,8 @@ function HandDetection() {
           confidence: (touchConf * 100).toFixed(1),
         };
         setTouchLog(prev => [entry, ...prev].slice(0, 50));
-        // Vẽ lên heatmap
-        addHeatPoint();
+        // Vẽ lên heatmap (OffscreenCanvas worker)
+        heatmap.addPoint();
       }
       
       // Gửi thông báo desktop + rung
@@ -296,6 +402,9 @@ function HandDetection() {
   };
 
   useEffect(() => {
+    // Khởi tạo OffscreenCanvas cho heatmap
+    heatmap.initCanvas();
+
     init();
     // Bắt đầu phiên làm việc
     statisticsManager.startSession();
@@ -319,14 +428,20 @@ function HandDetection() {
       setCurrentMode(newModes.current);
     });
 
-    // Cập nhật thời gian an toàn mỗi 1 giây
+    // Cập nhật thời gian an toàn + FPS mỗi 1 giây
     const safeTimeInterval = setInterval(() => {
       setLastSafeTime(Date.now() - lastSafeTimeRef.current);
+      setFps(fpsCountRef.current);
+      fpsCountRef.current = 0;
     }, 1000);
     
     return () => {
       // Dừng vòng lặp run() nếu đang chạy
       isRunningRef.current = false;
+      // Dừng camera stream
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      }
       clearInterval(safeTimeInterval);
       unsubscribeMode();
       unsubscribeNotif();
@@ -377,7 +492,7 @@ function HandDetection() {
         {/* Cột trái: Video + Confidence bars */}
         <div className="detection-left">
           <div className="video-wrapper" style={{ transform: `scale(${videoZoom})` }}>
-            <video ref={video} className="video" autoPlay />
+            <video ref={video} className="video" autoPlay playsInline muted />
             <canvas
               ref={heatCanvasRef}
               width={480}
@@ -388,7 +503,18 @@ function HandDetection() {
               <span className="status-dot" />
               {touched ? 'Đang chạm mặt!' : 'An toàn'}
             </div>
+            {!cameraOn && (
+              <div className="video-off-overlay">
+                <div className="video-off-overlay__icon">📷</div>
+                <div className="video-off-overlay__text">Camera đã tắt</div>
+              </div>
+            )}
             <div className="video-controls">
+              <button
+                className={`video-control-btn camera-toggle ${cameraOn ? '' : 'off'}`}
+                onClick={toggleCamera}
+                title={cameraOn ? 'Tắt camera' : 'Bật camera'}
+              >{cameraOn ? '📷' : '🚫'}</button>
               <button className="video-control-btn" onClick={() => setVideoZoom(Math.max(1, videoZoom - 0.1))} title="Thu nhỏ">−</button>
               <span className="video-zoom-level">{(videoZoom * 100).toFixed(0)}%</span>
               <button className="video-control-btn" onClick={() => setVideoZoom(Math.min(2, videoZoom + 0.1))} title="Phóng to">+</button>
@@ -397,8 +523,11 @@ function HandDetection() {
                 onClick={() => setShowHeatmap(h => !h)}
                 title={showHeatmap ? 'Ẩn heatmap' : 'Hiện heatmap'}
               >🔥</button>
-              <button className="video-control-btn" onClick={clearHeatmap} title="Xóa heatmap">✕</button>
+              <button className="video-control-btn" onClick={heatmap.clear} title="Xóa heatmap">✕</button>
             </div>
+            {fps > 0 && (
+              <div className="fps-badge">{fps} FPS {mlWorker.isReady() ? '⚡' : ''}</div>
+            )}
           </div>
 
           {/* Confidence bars ngay bên dưới video */}

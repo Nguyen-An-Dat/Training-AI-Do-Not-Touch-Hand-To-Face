@@ -81,6 +81,41 @@ class DataManager {
   }
 
   /**
+   * Lưu dataset nhận từ ML Worker (đã là format { label: { data, shape } })
+   * Compatible với format của saveModel() — dùng cùng storage key
+   * @param {{ [label: string]: { data: number[], shape: number[] } }} workerDataset
+   */
+  saveModelFromWorkerData(workerDataset) {
+    try {
+      localStorage.setItem(MODEL_KEY, JSON.stringify(workerDataset));
+      localStorage.setItem(MODEL_META_KEY, JSON.stringify({
+        savedAt: new Date().toISOString(),
+        labels: Object.keys(workerDataset),
+        sampleCounts: Object.fromEntries(
+          Object.entries(workerDataset).map(([label, { shape }]) => [label, shape[0]])
+        ),
+        source: 'ml_worker',
+      }));
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }
+
+  /**
+   * Đọc raw dataset từ localStorage để inject vào ML Worker
+   * @returns {{ [label: string]: { data: number[], shape: number[] } } | null}
+   */
+  loadModelRaw() {
+    try {
+      const raw = localStorage.getItem(MODEL_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Lấy thông tin metadata của model đã lưu
    * @returns {{ savedAt: string, labels: string[], sampleCounts: object } | null}
    */

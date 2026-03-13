@@ -1,5 +1,6 @@
 .settings {
-  max-width: 900px;
+  width: 100%;
+  max-width: min(1500px, calc(100vw - 96px));
   margin: 0 auto;
   padding: 2rem;
 }

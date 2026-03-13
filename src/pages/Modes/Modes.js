@@ -23,21 +23,70 @@ const WaveIcon = () => (
   </svg>
 );
 
-const ModeCard = ({ title, description, icon, isActive, onSelect, settings }) => (
-  <div className={`mode-card ${isActive ? 'active' : ''}`} onClick={onSelect}>
-    <div className="mode-card__icon">{icon}</div>
-    <div className="mode-card__content">
-      <h3>{title}</h3>
-      <p>{description}</p>
-    </div>
-    {settings && (
-      <div className="mode-card__settings">
-        {settings}
+const MODE_META = {
+  [WORK_MODES.NORMAL]: {
+    title: 'Chế Độ Bình Thường',
+    description: 'Giám sát cân bằng cho công việc hằng ngày',
+    color: '#3b82f6',
+    icon: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 7v5l3 2"/>
+      </svg>
+    ),
+  },
+  [WORK_MODES.POMODORO]: {
+    title: 'Pomodoro',
+    description: 'Chu kỳ tập trung cao độ và nghỉ ngắn có kiểm soát',
+    color: '#ef4444',
+    icon: <PomodoroIcon />,
+  },
+  [WORK_MODES.STUDY]: {
+    title: 'Chế Độ Học Tập',
+    description: 'Tối ưu nhắc nghỉ hợp lý cho các phiên học dài',
+    color: '#10b981',
+    icon: <BookIcon />,
+  },
+  [WORK_MODES.AMBIENT]: {
+    title: 'Chế Độ Ambient',
+    description: 'Hoạt động nền nhẹ nhàng, giảm tối đa gây xao nhãng',
+    color: '#8b5cf6',
+    icon: <WaveIcon />,
+  },
+};
+
+const ModeCard = ({ mode, isActive, onSelect, settings }) => {
+  const meta = MODE_META[mode];
+
+  return (
+    <article
+      className={`mode-card ${isActive ? 'active' : ''}`}
+      style={{ '--mode-color': meta.color }}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect()}
+    >
+      <div className="mode-card__head">
+        <div className="mode-card__icon-wrap">
+          <div className="mode-card__icon">{meta.icon}</div>
+        </div>
+        <span className="mode-card__status">{isActive ? 'Đang dùng' : 'Sẵn sàng'}</span>
       </div>
-    )}
-    {isActive && <div className="mode-card__badge">✓ Đang sử dụng</div>}
-  </div>
-);
+
+      <div className="mode-card__content">
+        <h3>{meta.title}</h3>
+        <p>{meta.description}</p>
+      </div>
+
+      <div className={`mode-card__check ${isActive ? 'checked' : ''}`}>
+        {isActive ? '✓' : ''}
+      </div>
+
+      {settings && <div className="mode-card__settings">{settings}</div>}
+    </article>
+  );
+};
 
 function Modes() {
   const [currentMode, setCurrentMode] = useState(() => modeManager.getMode());
@@ -65,13 +114,37 @@ function Modes() {
   const handleSavePreset = () => {
     if (newPresetName.trim()) {
       presetManager.savePreset(newPresetName, {
+        currentMode,
+        modes,
         timestamp: new Date().toISOString(),
-        description: 'Saved model preset',
+        description: 'Saved mode preset',
       });
       setPresets(presetManager.getAllPresets());
       setNewPresetName('');
       setShowPresetForm(false);
     }
+  };
+
+  const handleLoadPreset = (id) => {
+    const preset = presetManager.getPreset(id);
+    if (!preset?.data?.modes || !preset?.data?.currentMode) {
+      window.alert('Preset này không có đủ dữ liệu cấu hình để tải.');
+      return;
+    }
+
+    const presetModes = preset.data.modes;
+
+    if (presetModes.pomodoro) {
+      modeManager.updateModeConfig('pomodoro', presetModes.pomodoro);
+    }
+    if (presetModes.study) {
+      modeManager.updateModeConfig('study', presetModes.study);
+    }
+    if (presetModes.ambient) {
+      modeManager.updateModeConfig('ambient', presetModes.ambient);
+    }
+
+    modeManager.setMode(preset.data.currentMode);
   };
 
   const handleDeletePreset = (id) => {
@@ -82,30 +155,33 @@ function Modes() {
   };
 
   return (
-    <div className="modes">
+    <div className="modes modes-pro">
       <div className="modes__header">
-        <h1>Chế Độ Làm Việc</h1>
-        <p>Chọn chế độ phù hợp với nhu cầu của bạn</p>
+        <div>
+          <h1>Work Modes</h1>
+          <p>Tối ưu nhịp làm việc bằng cấu hình chuyên nghiệp cho từng bối cảnh.</p>
+        </div>
+        <div className="modes__header-chip">
+          <span>Đang hoạt động</span>
+          <strong>{MODE_META[currentMode]?.title || 'Chế độ mặc định'}</strong>
+        </div>
       </div>
 
-      {/* Mode Selection */}
       <section className="modes-section">
-        <h2>Chế Độ Hiện Tại</h2>
+        <div className="section-headline">
+          <h2>Chọn chế độ vận hành</h2>
+          <p>Nhấn vào thẻ để kích hoạt và điều chỉnh cấu hình chi tiết.</p>
+        </div>
+
         <div className="modes-grid">
-          {/* Normal Mode */}
           <ModeCard
-            title="Chế Độ Bình Thường"
-            description="Giám sát thường xuyên, thích hợp cho công việc hàng ngày"
-            icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>}
+            mode={WORK_MODES.NORMAL}
             isActive={currentMode === WORK_MODES.NORMAL}
             onSelect={() => selectMode(WORK_MODES.NORMAL)}
           />
 
-          {/* Pomodoro Mode */}
           <ModeCard
-            title="Pomodoro"
-            description="Làm việc 25 phút, nghỉ 5 phút (4 chu kỳ)"
-            icon={<PomodoroIcon />}
+            mode={WORK_MODES.POMODORO}
             isActive={currentMode === WORK_MODES.POMODORO}
             onSelect={() => selectMode(WORK_MODES.POMODORO)}
             settings={
@@ -120,7 +196,7 @@ function Modes() {
                       value={modes.pomodoro.workDuration / 1000 / 60}
                       onChange={(e) =>
                         updateModeConfig('pomodoro', {
-                          workDuration: parseInt(e.target.value) * 60 * 1000,
+                          workDuration: (parseInt(e.target.value, 10) || 1) * 60 * 1000,
                         })
                       }
                     />
@@ -135,7 +211,7 @@ function Modes() {
                       value={modes.pomodoro.breakDuration / 1000 / 60}
                       onChange={(e) =>
                         updateModeConfig('pomodoro', {
-                          breakDuration: parseInt(e.target.value) * 60 * 1000,
+                          breakDuration: (parseInt(e.target.value, 10) || 1) * 60 * 1000,
                         })
                       }
                     />
@@ -146,11 +222,8 @@ function Modes() {
             }
           />
 
-          {/* Study Mode */}
           <ModeCard
-            title="Chế Độ Học Tập"
-            description="Tối ưu hóa cho học tập, 45 phút làm + 10 phút nghỉ"
-            icon={<BookIcon />}
+            mode={WORK_MODES.STUDY}
             isActive={currentMode === WORK_MODES.STUDY}
             onSelect={() => selectMode(WORK_MODES.STUDY)}
             settings={
@@ -165,7 +238,7 @@ function Modes() {
                       value={modes.study.breakInterval / 1000 / 60}
                       onChange={(e) =>
                         updateModeConfig('study', {
-                          breakInterval: parseInt(e.target.value) * 60 * 1000,
+                          breakInterval: (parseInt(e.target.value, 10) || 15) * 60 * 1000,
                         })
                       }
                     />
@@ -186,11 +259,8 @@ function Modes() {
             }
           />
 
-          {/* Ambient Mode */}
           <ModeCard
-            title="Chế Độ Ambient"
-            description="Chạy ở nền, không làm phiền, chỉ cảnh báo lặng lẽ"
-            icon={<WaveIcon />}
+            mode={WORK_MODES.AMBIENT}
             isActive={currentMode === WORK_MODES.AMBIENT}
             onSelect={() => selectMode(WORK_MODES.AMBIENT)}
             settings={
@@ -223,10 +293,9 @@ function Modes() {
         </div>
       </section>
 
-      {/* Presets */}
       <section className="modes-section">
         <div className="section-header">
-          <h2>Preset Models</h2>
+          <h2>Preset cấu hình</h2>
           <button className="btn btn-primary" onClick={() => setShowPresetForm(!showPresetForm)}>
             {showPresetForm ? '✕ Hủy' : '+ Lưu Preset'}
           </button>
@@ -247,9 +316,9 @@ function Modes() {
         )}
 
         {presets.length > 0 ? (
-          <div className="presets-list">
+          <div className="presets-list presets-grid">
             {presets.map((preset) => (
-              <div key={preset.id} className="preset-item">
+              <div key={preset.id} className="preset-item preset-card">
                 <div className="preset-info">
                   <h3>{preset.name}</h3>
                   <p>
@@ -257,7 +326,9 @@ function Modes() {
                   </p>
                 </div>
                 <div className="preset-actions">
-                  <button className="btn-small btn-load">📥 Tải</button>
+                  <button className="btn-small btn-load" onClick={() => handleLoadPreset(preset.id)}>
+                    📥 Tải
+                  </button>
                   <button
                     className="btn-small btn-delete"
                     onClick={() => handleDeletePreset(preset.id)}
@@ -273,15 +344,22 @@ function Modes() {
         )}
       </section>
 
-      {/* Tips */}
-      <section className="modes-section tips">
-        <h2>Mẹo</h2>
-        <ul>
-          <li><strong>Pomodoro:</strong> Hiệu quả cho tập trung cao độ, phù hợp khi cần hoàn thành công việc</li>
-          <li><strong>Study Mode:</strong> Dành cho học sinh/sinh viên, nhắc nhở gián đoạn hợp lý</li>
-          <li><strong>Ambient Mode:</strong> Lý tưởng khi bạn đang trong cuộc họp hoặc không muốn bị làm phiền</li>
-          <li><strong>Presets:</strong> Lưu các cấu hình khác nhau cho từng hoàn cảnh sử dụng</li>
-        </ul>
+      <section className="modes-section tips-pro">
+        <h2>Gợi ý sử dụng</h2>
+        <div className="tips-grid">
+          <article>
+            <h3>⚡ Pomodoro</h3>
+            <p>Phù hợp cho các tác vụ cần tập trung sâu và có deadline rõ ràng.</p>
+          </article>
+          <article>
+            <h3>📚 Study</h3>
+            <p>Lý tưởng cho học dài phiên với nhịp nghỉ định kỳ để tránh quá tải.</p>
+          </article>
+          <article>
+            <h3>🌙 Ambient</h3>
+            <p>Dùng khi họp hoặc làm việc nhẹ, hạn chế âm thanh và giảm nhiễu giao diện.</p>
+          </article>
+        </div>
       </section>
     </div>
   );

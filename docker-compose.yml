@@ -1,7 +1,10 @@
 services:
   hand-detection:
+    build: .
     image: hand-detection-ai
     container_name: hand-detection
     ports:
-      - "2002:80"
+      - "2002:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
     restart: unless-stopped

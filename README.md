@@ -65,6 +65,22 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/a
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
 
+## Local HTTPS deployment (for mobile camera access)
+
+Khi mở app bằng điện thoại qua mạng LAN, camera chỉ hoạt động ổn định nếu chạy bằng HTTPS với cert được tin cậy.
+
+1. Tạo cert `server.crt` và `server.key` trong thư mục `certs/` (xem `certs/README.md`).
+2. Build & chạy bằng Docker Compose.
+3. Truy cập trên điện thoại bằng:
+
+- `https://<LAN_IP>:2002`
+
+HTTP vẫn có thể dùng để redirect tại:
+
+- `http://<LAN_IP>:2003`
+
+Lưu ý: nếu cert không được thiết bị tin cậy, trình duyệt có thể vẫn chặn camera.
+
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
